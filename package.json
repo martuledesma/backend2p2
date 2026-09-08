@@ -1,0 +1,26 @@
+{
+  "name": "plataforma-eventos-api",
+  "version": "1.0.0",
+  "description": "API REST para una Plataforma de Eventos e Inscripciones, organizada en capas (routes, controllers, services, repositories, dao, models).",
+  "main": "src/server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js"
+  },
+  "keywords": [
+    "express",
+    "api",
+    "eventos",
+    "backend"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "bcrypt": "^5.1.1",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "mongodb": "^7.6.0",
+    "mongoose": "^8.5.1"
+  }
+}
