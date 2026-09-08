@@ -1,4 +1,5 @@
 import express from 'express';
+import cookieParser from 'cookie-parser';
 
 import healthRouter from './routes/health.router.js';
 import eventsRouter from './routes/events.router.js';
@@ -10,6 +11,7 @@ const app = express();
 
 // Middlewares globales
 app.use(express.json());
+app.use(cookieParser());
 
 // Rutas
 app.use('/api/health', healthRouter);

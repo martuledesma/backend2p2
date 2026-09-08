@@ -1,5 +1,6 @@
 import { usersRepository } from '../repositories/users.repository.js';
-import { hashPassword } from '../utils/hash.js';
+import { hashPassword, comparePassword } from '../utils/hash.js';
+import { signToken } from '../utils/jwt.js';
 import {
   isValidEmail,
   isValidPassword,
@@ -44,6 +45,29 @@ class SessionsService {
     });
 
     return this.toPublicUser(user);
+  }
+
+  async loginUser({ email, password }) {
+    if (!email || !password) {
+      throw new ApiError(400, 'Faltan campos obligatorios');
+    }
+
+    const normalizedEmail = normalizeEmail(email);
+    const user = await usersRepository.findByEmail(normalizedEmail);
+
+    // Mensaje siempre genérico: no se distingue "no existe" de "contraseña
+    // incorrecta" para no darle pistas a quien intenta adivinar credenciales.
+    if (!user) {
+      throw new ApiError(401, 'Credenciales inválidas');
+    }
+
+    const passwordMatches = await comparePassword(password, user.password);
+    if (!passwordMatches) {
+      throw new ApiError(401, 'Credenciales inválidas');
+    }
+
+    // El JWT solo lleva lo mínimo: nunca la contraseña.
+    return signToken({ id: user._id, email: user.email, role: user.role });
   }
 
   // Nunca incluye password, ni en texto plano ni hasheada.
