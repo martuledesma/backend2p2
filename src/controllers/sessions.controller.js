@@ -1,49 +1,71 @@
-import { sessionsService } from '../services/sessions.service.js';
+import passport from '../config/passport.config.js';
+import { signToken } from '../utils/jwt.js';
 import { ApiError } from '../utils/errors.js';
 import { config } from '../config/config.js';
 
 const COOKIE_NAME = 'currentUser';
 const isProduction = config.nodeEnv === 'production';
 
+// Nunca incluye password, ni en texto plano ni hasheada.
+function toPublicUser(user) {
+  return {
+    id: user._id,
+    first_name: user.first_name,
+    last_name: user.last_name,
+    email: user.email,
+    role: user.role,
+  };
+}
+
 export const getSessions = (req, res) => {
-  // Sin lógica de auth todavía: placeholder para futuras entregas.
   res.status(200).json({ status: 'success', payload: [] });
 };
 
-export const registerUser = async (req, res) => {
-  try {
-    const { first_name, last_name, email, password } = req.body || {};
-
-    const payload = await sessionsService.registerUser({
-      first_name,
-      last_name,
-      email,
-      password,
-    });
-
-    res.status(201).json({ status: 'success', payload });
-  } catch (error) {
-    if (error instanceof ApiError) {
-      return res.status(error.statusCode).json({ status: 'error', message: error.message });
+// La ruta delega en passport.authenticate('register', ...); toda la lógica
+// de validación/hash/unicidad vive en la estrategia (passport.config.js).
+// Este controller solo traduce el resultado a la respuesta HTTP.
+export const registerUser = (req, res, next) => {
+  passport.authenticate('register', { session: false }, (err, user) => {
+    if (err) {
+      if (err instanceof ApiError) {
+        return res.status(err.statusCode).json({ status: 'error', message: err.message });
+      }
+      // Resguardo ante condición de carrera en el índice unique de Mongo.
+      if (err.code === 11000) {
+        return res.status(409).json({ status: 'error', message: 'El email ya está registrado' });
+      }
+      console.error(err);
+      return res.status(500).json({ status: 'error', message: 'Error interno del servidor' });
     }
 
-    // Resguardo ante una condición de carrera: dos registros simultáneos con
-    // el mismo email podrían pasar la validación previa y chocar recién en
-    // el índice unique de Mongo.
-    if (error.code === 11000) {
-      return res.status(409).json({ status: 'error', message: 'El email ya está registrado' });
+    if (!user) {
+      return res.status(400).json({ status: 'error', message: 'No se pudo registrar el usuario' });
     }
 
-    console.error(error);
-    res.status(500).json({ status: 'error', message: 'Error interno del servidor' });
-  }
+    return res.status(201).json({ status: 'success', payload: toPublicUser(user) });
+  })(req, res, next);
 };
 
-export const loginUser = async (req, res) => {
-  try {
-    const { email, password } = req.body || {};
+// La ruta delega en passport.authenticate('login', ...). La estrategia solo
+// valida credenciales; el JWT y la cookie los genera este controller, nunca
+// la estrategia.
+export const loginUser = (req, res, next) => {
+  passport.authenticate('login', { session: false }, (err, user) => {
+    if (err) {
+      if (err instanceof ApiError) {
+        return res.status(err.statusCode).json({ status: 'error', message: err.message });
+      }
+      console.error(err);
+      return res.status(500).json({ status: 'error', message: 'Error interno del servidor' });
+    }
 
-    const token = await sessionsService.loginUser({ email, password });
+    // Mensaje siempre genérico: no distingue email inexistente de password
+    // incorrecta.
+    if (!user) {
+      return res.status(401).json({ status: 'error', message: 'Credenciales inválidas' });
+    }
+
+    const token = signToken({ id: user._id, email: user.email, role: user.role });
 
     res.cookie(COOKIE_NAME, token, {
       httpOnly: true,
@@ -52,24 +74,18 @@ export const loginUser = async (req, res) => {
       secure: isProduction,
     });
 
-    res.status(200).json({ status: 'success', message: 'Login correcto' });
-  } catch (error) {
-    if (error instanceof ApiError) {
-      return res.status(error.statusCode).json({ status: 'error', message: error.message });
-    }
-
-    console.error(error);
-    res.status(500).json({ status: 'error', message: 'Error interno del servidor' });
-  }
+    return res.status(200).json({ status: 'success', message: 'Login correcto' });
+  })(req, res, next);
 };
 
-// El middleware `auth` ya validó el token y dejó el payload en req.user
-// antes de llegar acá. Nunca incluye password: el JWT nunca la tuvo.
+// El middleware `auth` (que envuelve la estrategia 'current') ya dejó el
+// payload del JWT en req.user antes de llegar acá.
 export const getCurrentUser = (req, res) => {
   const { id, email, role } = req.user;
   res.status(200).json({ status: 'success', payload: { id, email, role } });
 };
 
+// Logout no pasa por Passport: solo borra la cookie.
 export const logoutUser = (req, res) => {
   res.clearCookie(COOKIE_NAME);
   res.status(200).json({ status: 'success', message: 'Sesión cerrada' });

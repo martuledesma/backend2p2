@@ -1,23 +1,19 @@
-import { verifyToken } from '../utils/jwt.js';
+import passport from '../config/passport.config.js';
 
 /**
- * Middleware de autenticación: lee el JWT de la cookie `currentUser`,
- * lo verifica y guarda el payload en req.user. Si no hay cookie o el
- * token es inválido/expiró, responde 401 sin distinguir el motivo.
+ * Middleware de autenticación: envuelve la estrategia 'current' de Passport
+ * (JWT desde la cookie `currentUser`) para responder siempre en el formato
+ * JSON del proyecto. Si no hay token válido, 401 "No autenticado"; si es
+ * válido, deja el payload en req.user y sigue.
  */
 export const auth = (req, res, next) => {
-  const token = req.cookies?.currentUser;
-
-  if (!token) {
-    return res.status(401).json({ status: 'error', message: 'No autenticado' });
-  }
-
-  try {
-    req.user = verifyToken(token);
+  passport.authenticate('current', { session: false }, (err, user) => {
+    if (err || !user) {
+      return res.status(401).json({ status: 'error', message: 'No autenticado' });
+    }
+    req.user = user;
     next();
-  } catch (error) {
-    return res.status(401).json({ status: 'error', message: 'No autenticado' });
-  }
+  })(req, res, next);
 };
 
 export default auth;
