@@ -1,13 +1,43 @@
-// Modelo base de Event. Campos mínimos para esta entrega.
-// En próximas entregas se ampliará con cupos, inscripciones, categoría, etc.
-export class Event {
-  constructor({ id, title, description, date, location }) {
-    this.id = id;
-    this.title = title;
-    this.description = description;
-    this.date = date;
-    this.location = location;
-  }
-}
+import mongoose from 'mongoose';
+
+const { Schema, model } = mongoose;
+
+export const EVENT_STATUSES = ['published', 'cancelled'];
+
+const eventSchema = new Schema(
+  {
+    title: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+    description: {
+      type: String,
+      trim: true,
+    },
+    date: {
+      type: Date,
+    },
+    location: {
+      type: String,
+      trim: true,
+    },
+    // Quién lo creó. Nunca se toma del body: siempre es el usuario
+    // autenticado (req.user.id) que hizo el POST.
+    organizer: {
+      type: Schema.Types.ObjectId,
+      ref: 'User',
+      required: true,
+    },
+    status: {
+      type: String,
+      enum: EVENT_STATUSES,
+      default: 'published',
+    },
+  },
+  { timestamps: true },
+);
+
+export const Event = model('Event', eventSchema);
 
 export default Event;

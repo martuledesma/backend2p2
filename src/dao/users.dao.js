@@ -5,6 +5,10 @@ class UsersDao {
     return User.findOne({ email });
   }
 
+  async findAll() {
+    return User.find({});
+  }
+
   async create(userData) {
     return User.create(userData);
   }

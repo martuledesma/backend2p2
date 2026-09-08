@@ -5,6 +5,10 @@ class UsersRepository {
     return usersDao.findByEmail(email);
   }
 
+  async findAll() {
+    return usersDao.findAll();
+  }
+
   async create(userData) {
     return usersDao.create(userData);
   }
