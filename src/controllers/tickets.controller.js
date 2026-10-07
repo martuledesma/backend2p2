@@ -1,30 +1,9 @@
 import { ticketsService } from '../services/tickets.service.js';
-import { ApiError } from '../utils/errors.js';
-
-function toPublicTicket(ticket) {
-  return {
-    id: ticket._id,
-    user: ticket.user,
-    event: ticket.event,
-    status: ticket.status,
-    quantity: ticket.quantity,
-    reservationCode: ticket.reservationCode,
-    createdAt: ticket.createdAt,
-    cancelledAt: ticket.cancelledAt || null,
-  };
-}
-
-function handleError(error, res) {
-  if (error instanceof ApiError) {
-    return res.status(error.statusCode).json({ status: 'error', message: error.message });
-  }
-  console.error(error);
-  return res.status(500).json({ status: 'error', message: 'Error interno del servidor' });
-}
+import { toTicketDTO } from '../dto/ticket.dto.js';
 
 // POST /api/events/:eid/tickets — cualquier usuario autenticado (user,
 // organizer o admin) se puede inscribir a un evento publicado.
-export const createEventTicket = async (req, res) => {
+export const createEventTicket = async (req, res, next) => {
   try {
     const { quantity } = req.body || {};
     const ticket = await ticketsService.createTicket(
@@ -33,39 +12,39 @@ export const createEventTicket = async (req, res) => {
       req.params.eid,
       quantity,
     );
-    res.status(201).json({ status: 'success', payload: toPublicTicket(ticket) });
+    res.status(201).json({ status: 'success', payload: toTicketDTO(ticket) });
   } catch (error) {
-    handleError(error, res);
+    next(error);
   }
 };
 
 // GET /api/tickets/my-tickets — tickets del usuario autenticado, con los
 // datos del evento (title/date/location) ya resueltos por populate.
-export const getMyTickets = async (req, res) => {
+export const getMyTickets = async (req, res, next) => {
   try {
     const tickets = await ticketsService.getMyTickets(req.user.id);
-    res.status(200).json({ status: 'success', payload: tickets.map(toPublicTicket) });
+    res.status(200).json({ status: 'success', payload: tickets.map(toTicketDTO) });
   } catch (error) {
-    handleError(error, res);
+    next(error);
   }
 };
 
 // GET /api/events/:eid/tickets — organizer dueño del evento, o admin.
-export const getEventTickets = async (req, res) => {
+export const getEventTickets = async (req, res, next) => {
   try {
     const tickets = await ticketsService.getEventTickets(req.params.eid, req.user);
-    res.status(200).json({ status: 'success', payload: tickets.map(toPublicTicket) });
+    res.status(200).json({ status: 'success', payload: tickets.map(toTicketDTO) });
   } catch (error) {
-    handleError(error, res);
+    next(error);
   }
 };
 
 // PATCH /api/tickets/:tid/cancel — dueño del ticket, o admin.
-export const cancelTicket = async (req, res) => {
+export const cancelTicket = async (req, res, next) => {
   try {
     const ticket = await ticketsService.cancelTicket(req.params.tid, req.user);
-    res.status(200).json({ status: 'success', payload: toPublicTicket(ticket) });
+    res.status(200).json({ status: 'success', payload: toTicketDTO(ticket) });
   } catch (error) {
-    handleError(error, res);
+    next(error);
   }
 };
