@@ -44,6 +44,15 @@ class TicketsService {
     const eventTickets = await ticketsRepository.findByEvent(eventId);
     const activeTickets = eventTickets.filter(isActive);
 
+    // El chequeo de duplicado va ANTES que el de cupo a propósito: si el
+    // propio ticket activo del usuario es lo que está ocupando el cupo
+    // (por ejemplo, capacity=1 y el usuario ya tiene esa única plaza), el
+    // error correcto es "ya estás inscripto" (409), no "no hay cupo" (400).
+    const alreadyEnrolled = activeTickets.some((t) => String(t.user) === String(userId));
+    if (alreadyEnrolled) {
+      throw new ApiError(409, 'Ya tenés una inscripción activa para este evento');
+    }
+
     const occupied = activeTickets.reduce((sum, t) => sum + t.quantity, 0);
     const remaining = event.capacity - occupied;
     if (remaining < quantity) {
@@ -51,11 +60,6 @@ class TicketsService {
         400,
         `No hay cupos suficientes para este evento. Cupos disponibles: ${remaining}`,
       );
-    }
-
-    const alreadyEnrolled = activeTickets.some((t) => String(t.user) === String(userId));
-    if (alreadyEnrolled) {
-      throw new ApiError(409, 'Ya tenés una inscripción activa para este evento');
     }
 
     const ticket = await ticketsRepository.create({

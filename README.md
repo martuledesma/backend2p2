@@ -10,10 +10,11 @@ Backend II. API REST con Express organizada por capas para una Plataforma de Eve
 - **Pre-entrega 6:** entidad `Event` completa y lógica de negocio. Modelo ampliado (`category`, `capacity`, `price`, ciclo de vida de `status`), endpoint de detalle (`GET /api/events/:id`), reglas de negocio en la capa de servicio (fecha no pasada, capacidad/precio válidos, eventos cancelados inmodificables, no se puede publicar un evento finalizado) y listado con filtros + paginación + ordenamiento.
 - **Pre-entrega 7:** tickets, inscripciones y control de cupos. Entidad `Ticket` (referencias a `user` y `event`, nunca objetos embebidos), inscripción a eventos con las reglas de negocio de la consigna (evento publicado, cupos disponibles, sin duplicados), cancelación que libera el cupo automáticamente, listado de "mis tickets" con los datos del evento resueltos vía `populate`, y email de confirmación con Nodemailer.
 - **Pre-entrega 8:** arquitectura profesional en capas. Se formalizó la capa de **DTO** (`src/dto/`, antes eran funciones sueltas en cada controller), se creó `users.service.js` (la lógica de registro/login vivía directamente en `passport.config.js`, ahora `passport.config.js` solo la invoca) y se centralizó el manejo de errores en `errorHandler.middleware.js` (los controllers ya no formatean la respuesta de error ellos mismos: lanzan `ApiError` y llaman a `next(error)`). Ningún endpoint cambió su comportamiento externo.
+- **Entrega final:** integración completa. Se revisó el proyecto de punta a punta contra el flujo completo (registro → login → eventos → inscripciones → email → cancelación → permisos), se corrigió un bug real que había quedado pendiente desde la Pre-entrega 7 (ver "Qué cambió" más abajo) y se terminó de documentar el README (usuarios de prueba, checklist de verificación). No es un proyecto nuevo: es la misma base de las ocho pre-entregas anteriores.
 
 ## Temática elegida
 
-**Plataforma de Eventos e Inscripciones.** Hasta esta entrega está resuelto: autenticación completa (registro, login, JWT/cookie, logout, con Passport.js), autorización por roles, la entidad `Event` con su ciclo de vida y reglas de negocio, el flujo completo de inscripciones (cupos, duplicados, cancelación, email de confirmación), y ahora una arquitectura profesional en capas formales: DAO → Repository → Service → Controller, con DTO para todas las respuestas sensibles y manejo de errores centralizado. Quedan para la entrega final: notificaciones adicionales (recordatorios, cambios de estado del evento) y un panel administrativo más completo.
+**Plataforma de Eventos e Inscripciones.** La API integra, de forma coherente y sin partes aisladas: autenticación completa (registro, login, JWT en cookie `httpOnly`, logout, con Passport.js), autorización por roles y por propiedad del recurso, la entidad `Event` con su ciclo de vida y reglas de negocio, el flujo completo de inscripciones (cupos, duplicados, cancelación, email de confirmación con Nodemailer) y una arquitectura profesional en capas formales: DAO → Repository → Service → Controller, con DTO para todas las respuestas sensibles y manejo de errores centralizado.
 
 ## Tecnologías
 
@@ -93,7 +94,36 @@ Toda la lógica de autenticación pasa por **estrategias de Passport centralizad
 
 ### Roles
 
-El modelo `User` tiene un campo `role` con tres valores posibles: `user` (default), `organizer` y `admin`. El registro público (`POST /api/sessions/register`) **nunca** acepta `role` desde el body: todo usuario nuevo se crea como `user`, sin importar qué mande el cliente. Los roles `organizer` y `admin` solo se asignan manualmente (por ejemplo, editando el documento en MongoDB) — no hay, en esta entrega, un endpoint público para promover usuarios.
+El modelo `User` tiene un campo `role` con tres valores posibles: `user` (default), `organizer` y `admin`. El registro público (`POST /api/sessions/register`) **nunca** acepta `role` desde el body: todo usuario nuevo se crea como `user`, sin importar qué mande el cliente. Los roles `organizer` y `admin` solo se asignan manualmente en la base — no hay, en esta entrega, un endpoint público para promover usuarios.
+
+### Usuarios de prueba (cómo crearlos)
+
+No hace falta cargar nada a mano en la base: alcanza con registrar usuarios por la API y después promover el rol de los que necesites como `organizer` o `admin`.
+
+1. Registrar los usuarios que necesites (quedan todos con rol `user`):
+
+   ```bash
+   curl -s -X POST http://localhost:8080/api/sessions/register \
+     -H "Content-Type: application/json" \
+     -d '{"first_name":"Ana","last_name":"Gomez","email":"ana@mail.com","password":"123456"}'
+
+   curl -s -X POST http://localhost:8080/api/sessions/register \
+     -H "Content-Type: application/json" \
+     -d '{"first_name":"Root","last_name":"Admin","email":"admin@mail.com","password":"123456"}'
+   ```
+
+2. Promover el rol en MongoDB. Con `mongosh` (reemplazá `plataforma-eventos` por el nombre de tu base si usás otro, y ajustá el string de conexión si es un cluster de Atlas en vez de una instancia local):
+
+   ```bash
+   mongosh "mongodb://localhost:27017/plataforma-eventos" --eval '
+     db.users.updateOne({ email: "ana@mail.com" }, { $set: { role: "organizer" } });
+     db.users.updateOne({ email: "admin@mail.com" }, { $set: { role: "admin" } });
+   '
+   ```
+
+   Con Atlas también se puede hacer a mano desde la UI: **Browse Collections → `users` → editar el documento → cambiar `role`**.
+
+3. **Importante:** el JWT se firma en el momento del login con el rol que el usuario tenía en ese instante. Si promovés a alguien que ya había iniciado sesión, su cookie vieja sigue teniendo el rol anterior — tiene que volver a loguearse (`POST /api/sessions/login`) para que el nuevo token refleje el rol actualizado.
 
 ### Matriz de permisos
 
@@ -183,8 +213,8 @@ Todas responden `400` con un mensaje descriptivo — nunca `500`.
 1. El evento tiene que existir → si no, `404`.
 2. El evento tiene que estar `published` (si está `cancelled` o `finished`, mensaje específico; cualquier otro estado no publicado, mensaje genérico) → `400`.
 3. `quantity` (si se envía) tiene que ser un entero `> 0` → `400`. Si no se envía, se asume `1`.
-4. Tiene que haber cupo suficiente: `capacity` del evento menos la suma de `quantity` de todos los tickets **no cancelados** de ese evento tiene que ser `>= quantity` solicitada → `400` con un mensaje que incluye cuántos cupos quedan.
-5. El usuario no puede tener ya un ticket **activo** (no cancelado) para ese mismo evento → `409` (una inscripción por usuario por evento).
+4. El usuario no puede tener ya un ticket **activo** (no cancelado) para ese mismo evento → `409` (una inscripción por usuario por evento). **Este chequeo va antes que el de cupo a propósito:** si el propio ticket del usuario es lo que está ocupando el cupo (por ejemplo, `capacity: 1` y el usuario ya tiene esa única plaza), el error correcto es "ya estás inscripto", no "no hay cupo".
+5. Tiene que haber cupo suficiente: `capacity` del evento menos la suma de `quantity` de todos los tickets **no cancelados** de ese evento tiene que ser `>= quantity` solicitada → `400` con un mensaje que incluye cuántos cupos quedan.
 
 Si todo pasa: se crea el ticket con `status: "confirmed"` y se dispara el email de confirmación (best-effort: si el email falla, la inscripción ya quedó guardada y no se revierte).
 
@@ -218,7 +248,7 @@ routes → controllers → services → repositories → dao → models (Mongoos
 - **Controllers**: coordinan request/response. Extraen datos del `body`/`params`/`query`, llaman al service correspondiente y devuelven la respuesta ya pasada por un DTO. **Nunca** importan un modelo de Mongoose ni calculan cupos, validan estados o resuelven reglas de negocio — eso es trabajo del service. Ante un error, llaman a `next(error)` y dejan que el middleware centralizado lo traduzca a la respuesta HTTP.
 - **Services** (`events.service.js`, `tickets.service.js`, `users.service.js`): concentran **toda** la lógica de negocio — validación de cupos, estados del evento, inscripciones duplicadas, permisos sobre recursos propios (ownership), hash/verificación de contraseñas y envío del email de confirmación. Consumen únicamente repositories, nunca DAO ni modelos directamente. Lanzan `ApiError(statusCode, message)` ante cualquier violación de regla de negocio.
 - **Repositories** (`events.repository.js`, `tickets.repository.js`, `users.repository.js`): capa intermedia entre services y DAO. Exponen métodos orientados al dominio (`findByEmail`, `findByEventWithAttendees`, etc.) y usan el DAO correspondiente — nunca importan modelos.
-- **DAO** (`events.dao.js`, `tickets.dao.js`, `users.dao.js`): son los **únicos** archivos de la app que importan modelos de Mongoose directamente. Exponen métodos de acceso a datos (`findById`, `findOne`, `create`, `updateById`, etc.) y traducen errores de Mongo (como un `CastError` por un id con formato inválido) en valores simples (`null`) para que la capa de servicio decida qué código HTTP corresponde — nunca un `500` para esos casos.
+- **DAO** (`events.dao.js`, `tickets.dao.js`, `users.dao.js`): son los **únicos** archivos de la app que importan modelos de Mongoose directamente, y por lo tanto el único lugar que conoce operadores de Mongo (`$regex`, `$gte`, `$lte`, etc.). Exponen métodos de acceso a datos (`findById`, `findOne`, `create`, `updateById`, etc.) y traducen errores de Mongo (como un `CastError` por un id con formato inválido) en valores simples (`null`) para que la capa de servicio decida qué código HTTP corresponde — nunca un `500` para esos casos. El listado de eventos (`events.dao.js#findPage`) construye un filtro de Mongo a partir de los criterios de negocio y ejecuta `find().sort().skip().limit()` más `countDocuments()` contra la base — nunca trae todos los documentos a memoria para filtrar/ordenar/paginar ahí (ver "Qué cambió en la entrega final").
 - **DTO** (`src/dto/`): el único lugar donde se decide qué campos salen en una respuesta. Ninguna respuesta de la API expone `password`, ni siquiera hasheada. Cuando un documento viene resuelto por `.populate()` (por ejemplo, el `user` dentro de un `Ticket`), el DTO lo vuelve a filtrar a mano — una segunda barrera además del `select` del populate, para que un cambio futuro en la query nunca termine filtrando datos sensibles.
 - **Manejo de errores**: todo error de negocio se modela como `ApiError(statusCode, message)` (`src/utils/errors.js`). Los services lo lanzan, los controllers lo propagan con `next(error)`, y `errorHandler.middleware.js` (middleware centralizado, al final de `app.js`) es el único lugar que lo traduce a su `statusCode` real (`400`/`401`/`403`/`404`/`409`). Cualquier otro error no esperado cae en `500`, sin filtrar detalles internos al cliente.
 
@@ -643,9 +673,39 @@ Body esperado: `{ "email": "...", "password": "..." }`. Si las credenciales son 
 5. Endpoint protegido sin cookie → `401`. Con cookie pero sin el rol requerido → `403`.
 6. Ningún controller importa un modelo de Mongoose; ningún service importa un modelo directamente (todo pasa por su repository).
 
-## Próximos pasos (entrega final)
+## Qué cambió en la entrega final
+
+Esta entrega no agrega funcionalidades nuevas: es una revisión de punta a punta del proyecto de las ocho pre-entregas anteriores, para entregarlo íntegro e integrado.
+
+- **Bug corregido en `tickets.service.js`:** en `createTicket`, el chequeo de cupo se ejecutaba *antes* que el de inscripción duplicada. Con un evento de `capacity: 1` ya ocupado por el propio ticket activo del usuario, esto hacía que reintentar la inscripción devolviera `400` ("no hay cupo") en vez del `409` ("ya estás inscripto") que corresponde — un caso de prueba muy fácil de ejecutar sin querer. Se reordenaron los dos chequeos (el de duplicado ahora va primero) y se agregó un test que reproduce exactamente ese escenario para que no se vuelva a filtrar.
+- Se verificó explícitamente, con una corrida end-to-end, cada uno de los 10 puntos del flujo completo pedido en la consigna (ver checklist abajo).
+- Se completó el README con la sección de "usuarios de prueba" (antes solo decía "se asignan manualmente", sin el comando concreto) y este checklist final.
+
+**Ajuste pedido por el corrector (devolución sobre la primera entrega):** el filtro de `GET /api/events` (`listEvents`) se resolvía trayendo *todos* los eventos con `findAll()` y filtrando/ordenando/paginando en memoria, en el service. Se llevaron esos tres pasos a consultas reales de Mongo:
+
+- `events.dao.js` reemplazó `findAll()` por `findPage({status, category, location, dateFrom, dateTo, sort, skip, limit})`, que arma un filtro de Mongo (`$regex`/`$options` para `category`/`location` con el mismo criterio case-insensitive de antes, `$gte`/`$lte` para el rango de fechas) y ejecuta `Event.find(filter).sort(sort).skip(skip).limit(limit)` junto con `Event.countDocuments(filter)` para el total — este es ahora el único lugar de toda la app que arma sintaxis de Mongo para el listado.
+- `events.repository.js` pasó de un `findAll()` que traía todo, a un `findPage(criteria)` que es un simple passthrough al DAO.
+- `events.service.js` dejó de filtrar/ordenar/paginar en JavaScript: ahora solo calcula los valores de negocio (página/límite por default, el `skip` a partir de la página, y traduce el string `sort` de la URL — `"-date"` → `{date: -1}` — a un objeto de orden de Mongo) y le pasa ese criterio ya traducido al repository.
+- El comportamiento externo del endpoint no cambió (mismos filtros, misma paginación, mismo formato de respuesta): lo que cambió es que ahora escala con la base en vez de traer la colección entera a memoria en cada request.
+
+## Checklist de verificación final
+
+Los 10 puntos del flujo completo de la consigna, verificados antes de esta entrega (automatizado contra una app real corriendo con los mismos shims de Node usados en las pre-entregas anteriores, sin acceso a internet):
+
+1. ✅ Registro → login → `/current` (200) → logout → `/current` sin cookie (401).
+2. ✅ `user` intenta crear evento → `403`.
+3. ✅ `organizer` crea evento → `user` se inscribe → se dispara el intento de email de confirmación → el cupo ocupado se recalcula a partir de los tickets activos.
+4. ✅ `user` intenta inscribirse de nuevo al mismo evento → `409` (duplicado) — **el caso que estaba roto, ver arriba.**
+5. ✅ Otro usuario intenta inscribirse a un evento sin cupo → `400` con mensaje claro (incluye cupos disponibles).
+6. ✅ El usuario cancela su ticket → el cupo se libera → una nueva inscripción de otro usuario funciona.
+7. ✅ `organizer` intenta modificar un evento ajeno → `403`.
+8. ✅ `admin` modifica el evento de otro organizador → éxito (`200`).
+9. ✅ Ninguna respuesta (usuario, evento, ticket, incluso con `populate`) incluye `password`.
+10. ✅ `GET /api/events?status=published&page=2&limit=5` → `200` con `data`/`page`/`limit`/`total`/`totalPages` (filtro, paginación y orden resueltos con `find`/`skip`/`limit`/`sort`/`countDocuments` reales en el DAO, no en memoria).
+
+## Posibles mejoras futuras (fuera del alcance de esta cursada)
 
 - Notificaciones adicionales (recordatorios antes del evento, aviso si el organizer cancela un evento con inscriptos)
-- Endpoint administrativo para cambiar el rol de un usuario
+- Endpoint administrativo para cambiar el rol de un usuario (hoy se hace manualmente, ver "Usuarios de prueba")
 - Estrategias adicionales en `passport.config.js` para providers externos (Google, GitHub)
-- Terminar de pulir la API completa, segura, desacoplada y organizada en capas profesionales para la entrega final del curso
+- Colección de Postman con el flujo completo, como evidencia adicional a este README

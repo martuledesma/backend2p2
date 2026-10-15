@@ -48,48 +48,43 @@ function assertOwnerOrAdmin(event, user) {
   }
 }
 
+// Traduce el parámetro de query "sort" (ej. "-date", "price") a un objeto de
+// orden de Mongo ({ date: -1 } / { price: 1 }). Esta es la única traducción
+// de sintaxis que conserva el service: el signo "-" es un formato de la URL,
+// no de Mongo, así que decidir qué significa es responsabilidad del service;
+// una vez traducido, quien ejecuta la query real es el DAO.
+function buildSortSpec(sort) {
+  if (!sort) return undefined;
+  const descending = sort.startsWith('-');
+  const field = descending ? sort.slice(1) : sort;
+  return { [field]: descending ? -1 : 1 };
+}
+
 class EventsService {
-  // Listado con filtros + paginación + ordenamiento. La construcción del
-  // filtro y el "cómo" se pagina/ordena es lógica de negocio y vive acá; el
-  // DAO solo sabe traer todos los documentos.
+  // Listado con filtros + paginación + ordenamiento. El service solo decide
+  // los valores de negocio (página/límite por default, qué significa cada
+  // filtro, cómo traducir el string de sort); quien ejecuta find/skip/limit/
+  // sort contra Mongo es el DAO, vía repository.findPage.
   async listEvents(queryParams = {}) {
     const { status, category, location, dateFrom, dateTo, page, limit, sort } = queryParams;
 
-    const all = await eventsRepository.findAll();
-
-    let filtered = all.filter((event) => {
-      if (status && event.status !== status) return false;
-      if (category && String(event.category).toLowerCase() !== String(category).toLowerCase()) {
-        return false;
-      }
-      if (location && String(event.location).toLowerCase() !== String(location).toLowerCase()) {
-        return false;
-      }
-      if (dateFrom && new Date(event.date) < new Date(dateFrom)) return false;
-      if (dateTo && new Date(event.date) > new Date(dateTo)) return false;
-      return true;
-    });
-
-    if (sort) {
-      const descending = sort.startsWith('-');
-      const field = descending ? sort.slice(1) : sort;
-      filtered = [...filtered].sort((a, b) => {
-        const aVal = a[field];
-        const bVal = b[field];
-        if (aVal === bVal) return 0;
-        if (aVal === undefined) return 1;
-        if (bVal === undefined) return -1;
-        const result = aVal > bVal ? 1 : -1;
-        return descending ? -result : result;
-      });
-    }
-
     const pageNum = Math.max(1, parseInt(page, 10) || 1);
     const limitNum = Math.max(1, parseInt(limit, 10) || 10);
-    const total = filtered.length;
+    const skip = (pageNum - 1) * limitNum;
+    const sortSpec = buildSortSpec(sort);
+
+    const { data, total } = await eventsRepository.findPage({
+      status,
+      category,
+      location,
+      dateFrom,
+      dateTo,
+      sort: sortSpec,
+      skip,
+      limit: limitNum,
+    });
+
     const totalPages = Math.max(1, Math.ceil(total / limitNum));
-    const start = (pageNum - 1) * limitNum;
-    const data = filtered.slice(start, start + limitNum);
 
     return { data, page: pageNum, limit: limitNum, total, totalPages };
   }
